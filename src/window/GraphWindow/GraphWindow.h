@@ -21,6 +21,9 @@
 
 #pragma once
 
+#include <QElapsedTimer>
+#include <QTimer>
+
 #include "core/Backend.h"
 #include "core/ConfigurableWidget.h"
 #include "core/MeasurementSetup.h"
@@ -52,6 +55,10 @@ public slots:
     void reset();
     void rewindForWindow(int windowSeconds);
     void onTraceAppended();
+    void setMeasurementActive(bool active);
+
+private slots:
+    void onDecayTick();
 
 signals:
     void dataDecoded(const QMap<GraphSignal*, DecodedSignalData>& newPoints, double globalStartTime);
@@ -59,12 +66,32 @@ signals:
 private:
     struct BusLoadEntry { double timestamp; uint32_t bits; };
 
+    // Sliding window over the last second of traffic. The window is kept as a
+    // QList plus a head index (QList::removeFirst() is a memmove, which made
+    // pruning quadratic) and the bit count is maintained incrementally instead
+    // of re-summing the whole window for every single frame.
+    struct BusLoadState
+    {
+        QList<BusLoadEntry> window;
+        int head = 0;
+        uint64_t bitsInWindow = 0;
+        double lastEmit = -1.0;
+    };
+
+    void sampleBusLoad(GraphSignal *signal, BusLoadState &state, double t,
+                       QMap<GraphSignal*, DecodedSignalData> &newPoints);
+    void updateDecayTimer();
+
     Backend& _backend;
     int _lastProcessedIdx;
     double _globalStartTime;
+    bool _measurementActive = true;
+    double _traceTimeAnchor = -1.0;
+    QElapsedTimer _sinceTraceTimeAnchor;
+    QTimer* _decayTimer = nullptr;
     QList<GraphSignal*> _activeSignals;
     QMap<GraphSignal*, BusInterfaceIdList> _signalInterfaces;
-    QMap<GraphSignal*, QList<BusLoadEntry>> _busLoadWindows;
+    QMap<GraphSignal*, BusLoadState> _busLoadStates;
     QMutex _mutex;
 };
 
@@ -113,6 +140,7 @@ signals:
     void activeSignalsUpdated(const QList<GraphSignal*>& activeSignals, const QMap<GraphSignal*, BusInterfaceIdList>& signalInterfaces, double globalStartTime);
     void requestDecoderReset();
     void requestDecoderRewindForWindow(int windowSeconds);
+    void measurementActiveChanged(bool active);
 
 private:
     void connectLegendMarkers(VisualizationWidget* v);
@@ -124,10 +152,12 @@ private:
     double _sessionStartTime = -1.0;
     QList<VisualizationWidget*> _visualizations;
     VisualizationWidget* _activeVisualization;
+    bool _measurementActive = true;
 
     QList<GraphSignal*> _ownedSignals;
 
     void setupVisualizations();
+    void updateVisualizationActivation();
     void updateConditionalSignals();
     void clearGraphData();
     void resetGraphView();

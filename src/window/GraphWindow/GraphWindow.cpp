@@ -67,6 +67,7 @@ void SignalDecoderWorker::updateActiveSignals(const QList<GraphSignal*>& activeS
     _activeSignals = activeSignals;
     _signalInterfaces = signalInterfaces;
     _globalStartTime = globalStartTime;
+    updateDecayTimer();
 }
 
 void SignalDecoderWorker::clearActiveSignals()
@@ -74,7 +75,9 @@ void SignalDecoderWorker::clearActiveSignals()
     QMutexLocker locker(&_mutex);
     _activeSignals.clear();
     _signalInterfaces.clear();
-    _busLoadWindows.clear();
+    _busLoadStates.clear();
+    _traceTimeAnchor = -1.0;
+    updateDecayTimer();
 }
 
 void SignalDecoderWorker::reset()
@@ -82,7 +85,8 @@ void SignalDecoderWorker::reset()
     QMutexLocker locker(&_mutex);
     _lastProcessedIdx = _backend.getTrace()->size();
     _globalStartTime = -1.0;
-    _busLoadWindows.clear();
+    _busLoadStates.clear();
+    _traceTimeAnchor = -1.0;
 }
 
 void SignalDecoderWorker::rewindForWindow(int windowSeconds)
@@ -119,6 +123,19 @@ void SignalDecoderWorker::rewindForWindow(int windowSeconds)
     _globalStartTime = -1.0;
 }
 
+namespace {
+
+constexpr double busLoadWindowSecs = 1.0;
+// Bus load is a 1 s moving average, so there is nothing to gain from one sample
+// per frame - that produces thousands of chart points per second and stalls the
+// GUI thread. 20 Hz is far more than the curve can show.
+constexpr double busLoadSampleSecs = 0.05;
+constexpr int busLoadSampleMs = 50;
+// Bound the per-signal window so a burst cannot grow it without limit.
+constexpr int busLoadMaxWindow = 100000;
+
+} // namespace
+
 static uint32_t computeFrameBits(const BusMessage &msg)
 {
     if (msg.busType() == BusType::LIN) {
@@ -154,38 +171,23 @@ void SignalDecoderWorker::onTraceAppended()
         return;
     }
 
-    constexpr double busLoadWindowSecs = 1.0;
-
     QMap<GraphSignal*, DecodedSignalData> newPoints;
+    double batchEndTime = -1.0;
 
     for (int i = _lastProcessedIdx; i < currentSize; ++i) {
         BusMessage msg = _backend.getTrace()->getMessage(i);
         BusInterfaceId msgIfId = msg.getInterfaceId();
         double t = msg.getFloatTimestamp() - _globalStartTime;
+        batchEndTime = t;
 
         for (GraphSignal* signal : _activeSignals) {
             if (signal->isBusLoad()) {
                 if (msg.getInterfaceId() != signal->busLoadInterfaceId()) continue;
 
-                uint32_t bits = computeFrameBits(msg);
-                auto &window = _busLoadWindows[signal];
-                window.append({t, bits});
-
-                // Prune entries outside the rolling window
-                while (!window.isEmpty() && window.first().timestamp < t - busLoadWindowSecs)
-                    window.removeFirst();
-
-                unsigned bitrate = signal->busLoadBitrate();
-                if (bitrate > 0) {
-                    uint64_t totalBits = 0;
-                    for (const auto &entry : std::as_const(window)) totalBits += entry.bits;
-                    double load = static_cast<double>(totalBits)
-                                  / (static_cast<double>(bitrate) * busLoadWindowSecs) * 100.0;
-                    if (load > 100.0) load = 100.0;
-                    newPoints[signal].interfaceId = msgIfId;
-                    newPoints[signal].timestamps.append(t);
-                    newPoints[signal].values.append(load);
-                }
+                auto &state = _busLoadStates[signal];
+                state.window.append({t, computeFrameBits(msg)});
+                state.bitsInWindow += state.window.last().bits;
+                sampleBusLoad(signal, state, t, newPoints);
             } else {
                 if (signal->isPresentInMessage(msg)) {
                     if (_signalInterfaces.contains(signal) && !_signalInterfaces[signal].contains(msgIfId))
@@ -200,8 +202,107 @@ void SignalDecoderWorker::onTraceAppended()
     }
 
     _lastProcessedIdx = currentSize;
+
+    if (batchEndTime >= 0.0) {
+        // A channel that went quiet gets no frames of its own, so age every
+        // bus-load window up to the end of the batch. Without this its curve
+        // would freeze at the last value instead of falling towards zero.
+        for (GraphSignal* signal : _activeSignals) {
+            if (!signal->isBusLoad()) continue;
+            sampleBusLoad(signal, _busLoadStates[signal], batchEndTime, newPoints);
+        }
+        _traceTimeAnchor = batchEndTime;
+        _sinceTraceTimeAnchor.start();
+    }
+
     if (!newPoints.isEmpty()) {
         emit dataDecoded(newPoints, _globalStartTime);
+    }
+}
+
+// Ages the rolling window up to t and emits a sample if one is due. Shared by
+// the frame path and the idle timer so both decay identically.
+void SignalDecoderWorker::sampleBusLoad(GraphSignal *signal, BusLoadState &state, double t,
+                                        QMap<GraphSignal*, DecodedSignalData> &newPoints)
+{
+    // Drop entries that fell out of the rolling window
+    const double cutoff = t - busLoadWindowSecs;
+    while (state.head < state.window.size() && state.window[state.head].timestamp < cutoff) {
+        state.bitsInWindow -= state.window[state.head].bits;
+        ++state.head;
+    }
+    // Reclaim the consumed prefix in one block instead of per frame
+    if (state.head > 0 && (state.head * 2 >= state.window.size() || state.window.size() > busLoadMaxWindow)) {
+        state.window.remove(0, state.head);
+        state.head = 0;
+    }
+
+    const unsigned bitrate = signal->busLoadBitrate();
+    if (bitrate == 0) return;
+    if (state.lastEmit >= 0.0 && t - state.lastEmit < busLoadSampleSecs) return;
+
+    state.lastEmit = t;
+    double load = static_cast<double>(state.bitsInWindow)
+                  / (static_cast<double>(bitrate) * busLoadWindowSecs) * 100.0;
+    if (load > 100.0) load = 100.0;
+
+    newPoints[signal].interfaceId = signal->busLoadInterfaceId();
+    newPoints[signal].timestamps.append(t);
+    newPoints[signal].values.append(load);
+}
+
+// Fires while the whole trace is idle: no messages arrive, so onTraceAppended()
+// never runs and only wall-clock time can advance the windows.
+void SignalDecoderWorker::onDecayTick()
+{
+    QMutexLocker locker(&_mutex);
+
+    if (_traceTimeAnchor < 0.0 || _globalStartTime < 0.0) return;
+
+    const double t = _traceTimeAnchor + _sinceTraceTimeAnchor.elapsed() / 1000.0;
+
+    QMap<GraphSignal*, DecodedSignalData> newPoints;
+    for (GraphSignal* signal : _activeSignals) {
+        if (!signal->isBusLoad()) continue;
+        auto it = _busLoadStates.find(signal);
+        if (it == _busLoadStates.end()) continue;
+        // Nothing left in the window means the curve already reached zero
+        if (it->head >= it->window.size() && it->lastEmit >= 0.0
+            && it->bitsInWindow == 0 && t - it->lastEmit > busLoadWindowSecs) continue;
+        sampleBusLoad(signal, *it, t, newPoints);
+    }
+
+    if (!newPoints.isEmpty()) {
+        emit dataDecoded(newPoints, _globalStartTime);
+    }
+}
+
+void SignalDecoderWorker::setMeasurementActive(bool active)
+{
+    QMutexLocker locker(&_mutex);
+    _measurementActive = active;
+    if (!active) {
+        _traceTimeAnchor = -1.0;
+    }
+    updateDecayTimer();
+}
+
+// Runs in the decoder thread, so the timer is created lazily here rather than in
+// the constructor (which executes on the GUI thread before moveToThread()).
+void SignalDecoderWorker::updateDecayTimer()
+{
+    bool needed = _measurementActive
+                  && std::any_of(_activeSignals.cbegin(), _activeSignals.cend(),
+                                 [](GraphSignal *s) { return s->isBusLoad(); });
+
+    if (needed) {
+        if (!_decayTimer) {
+            _decayTimer = new QTimer(this);
+            connect(_decayTimer, &QTimer::timeout, this, &SignalDecoderWorker::onDecayTick);
+        }
+        if (!_decayTimer->isActive()) _decayTimer->start(busLoadSampleMs);
+    } else if (_decayTimer) {
+        _decayTimer->stop();
     }
 }
 
@@ -237,6 +338,7 @@ GraphWindow::GraphWindow(QWidget *parent, Backend &backend) :
     connect(this, &GraphWindow::activeSignalsUpdated, _decoderWorker, &SignalDecoderWorker::updateActiveSignals);
     connect(this, &GraphWindow::requestDecoderReset, _decoderWorker, &SignalDecoderWorker::reset);
     connect(this, &GraphWindow::requestDecoderRewindForWindow, _decoderWorker, &SignalDecoderWorker::rewindForWindow);
+    connect(this, &GraphWindow::measurementActiveChanged, _decoderWorker, &SignalDecoderWorker::setMeasurementActive);
     connect(_backend.getTrace(), &BusTrace::afterAppend, _decoderWorker, &SignalDecoderWorker::onTraceAppended);
     connect(_decoderWorker, &SignalDecoderWorker::dataDecoded, this, &GraphWindow::onDecodedDataReady);
 
@@ -369,6 +471,7 @@ void GraphWindow::onViewTypeChanged(int index)
 
         ui->stackedWidget->setCurrentWidget(_activeVisualization);
 
+        updateVisualizationActivation();
         _activeVisualization->onActivated();
 
         // Show column selector only for Gauge view (index 3)
@@ -929,12 +1032,25 @@ void GraphWindow::applyPendingSignals()
 void GraphWindow::onResumeMeasurement()
 {
     clearGraphData();
-    for (auto v : _visualizations) v->setActive(true);
+    _measurementActive = true;
+    updateVisualizationActivation();
+    emit measurementActiveChanged(true);
 }
 
 void GraphWindow::onPauseMeasurement()
 {
-    for (auto v : _visualizations) v->setActive(false);
+    _measurementActive = false;
+    updateVisualizationActivation();
+    emit measurementActiveChanged(false);
+}
+
+// Only the visualization on screen needs its periodic chart sync running.
+// Hidden ones keep buffering decoded points and catch up in onActivated().
+void GraphWindow::updateVisualizationActivation()
+{
+    for (auto v : _visualizations) {
+        v->setActive(_measurementActive && v == _activeVisualization);
+    }
 }
 
 void GraphWindow::populateSignalTree()
