@@ -1124,7 +1124,7 @@ QDockWidget *MainWindow::addScriptWidget(QMainWindow *parent)
     }
 
     auto *scriptWindow = new ScriptWindow(nullptr, backend());
-    auto *dock = makeDock(tr("Python Script"), QStringLiteral("dock_script"), scriptWindow, parent);
+    auto *dock = makeDock(tr("Python"), QStringLiteral("dock_script"), scriptWindow, parent);
     if (dock)
         connect(scriptWindow, &ConfigurableWidget::settingsChanged,
                 this, [this]() { setWorkspaceModified(true); });

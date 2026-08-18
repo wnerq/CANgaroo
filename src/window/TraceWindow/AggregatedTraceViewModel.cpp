@@ -48,7 +48,7 @@ AggregatedTraceViewModel::AggregatedTraceViewModel(Backend &backend)
     connect(&_fadeTimer, &QTimer::timeout, this, [this]()
     {
         const int rows = _rootItem->childCount();
-        if (rows <= 0)
+        if (rows <= 0 || !this->backend()->isMeasurementRunning())
         {
             return;
         }
@@ -345,14 +345,21 @@ QVariant AggregatedTraceViewModel::data_TextColorRole(const QModelIndex &index, 
         ? item->_lastmsg
         : item->parent()->_lastmsg;
 
-    // Fade stale messages via alpha based on time since last reception.
-    // Precondition: message timestamps must be Unix-epoch microseconds so that
-    // getTimestamp_ms() is directly comparable to currentMSecsSinceEpoch().
-    qint64 now_ms = _fadeNowMs > 0 ? _fadeNowMs : QDateTime::currentMSecsSinceEpoch();
-    double diff_sec = (now_ms - msg.getTimestamp_ms()) / 1000.0;
+    // Fade stale messages via alpha based on time since last reception, but
+    // only while the measurement is running - once it's stopped no more
+    // messages will arrive to refresh timestamps, so every row would just
+    // decay to minimum alpha over a few seconds and stay unreadable.
+    int alpha = 255;
+    if (backend()->isMeasurementRunning())
+    {
+        // Precondition: message timestamps must be Unix-epoch microseconds so
+        // that getTimestamp_ms() is directly comparable to currentMSecsSinceEpoch().
+        qint64 now_ms = _fadeNowMs > 0 ? _fadeNowMs : QDateTime::currentMSecsSinceEpoch();
+        double diff_sec = (now_ms - msg.getTimestamp_ms()) / 1000.0;
 
-    int alpha = 255 - static_cast<int>(diff_sec * 58);
-    alpha = qBound(80, alpha, 255);
+        alpha = 255 - static_cast<int>(diff_sec * 58);
+        alpha = qBound(80, alpha, 255);
+    }
 
     QColor color = msg.isErrorFrame()
         ? (isDark ? QColor(255, 100, 100) : QColor(Qt::red))

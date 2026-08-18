@@ -48,7 +48,20 @@ void ThemeManager::applyTheme(Theme theme, bool nativeStyling)
         // Defer entirely to the active QStyle and platform theme: drop any
         // global stylesheet and reset the palette to the style's own one.
         qApp->setStyleSheet("");
-        qApp->setPalette(qApp->style()->standardPalette());
+        QPalette palette = qApp->style()->standardPalette();
+
+        // Some platform themes (e.g. GNOME/Adwaita) supply a heavily dimmed
+        // "Inactive" color group to mimic GTK's unfocused-window "backdrop"
+        // look. Qt briefly paints widgets with that group whenever window
+        // activation churns (e.g. right after a QFileDialog closes), which
+        // made freshly loaded script text flash faded/gray. Normalize the
+        // Inactive text/base colors to match Active so content stays legible.
+        for (QPalette::ColorRole role : {QPalette::WindowText, QPalette::Text, QPalette::ButtonText, QPalette::Base, QPalette::Window})
+        {
+            palette.setColor(QPalette::Inactive, role, palette.color(QPalette::Active, role));
+        }
+
+        qApp->setPalette(palette);
     }
     else
     {
