@@ -175,8 +175,13 @@ void UnifiedTraceViewModel::processNewMessages()
     for (int i = m_lastProcessedIndex + 1; i < size; ++i) {
         BusMessage msg = trace->getMessage(i);
 
+        // A loaded DBC message takes priority over the generic protocol decoders
+        // in the combined "All" view, so e.g. a J1939-shaped frame covered by the
+        // DBC is shown with its DBC signal names instead of the raw PGN decode.
+        bool preferDbc = m_category == Cat_All && backend()->findDbMessage(msg) != nullptr;
+
         ProtocolMessage pmsg;
-        DecodeStatus status = m_protocolManager.processFrame(msg, pmsg);
+        DecodeStatus status = preferDbc ? DecodeStatus::Ignored : m_protocolManager.processFrame(msg, pmsg);
 
         bool shouldAppend = false;
         if (status == DecodeStatus::Completed) {
