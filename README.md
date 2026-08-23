@@ -87,6 +87,9 @@ sudo setcap cap_net_admin+ep /sbin/ip
 * Install [Python 3](https://www.python.org/downloads/) and [pybind11](https://github.com/pybind/pybind11) (`pip install pybind11`).
 * Open `cangaroo.pro` in Qt Creator and build.
 
+For instructions on building Qt from source with MSYS2/MinGW and compiling
+CANgaroo natively on Windows, see [Building on Windows](docs/BuildingOnWindows.md).
+
 #### Deployment
 
 Include the required Qt6 libraries or run `windeployqt` on the `.exe`:
