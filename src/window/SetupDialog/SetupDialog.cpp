@@ -253,6 +253,12 @@ void SetupDialog::edNetworkNameChanged()
 
 void SetupDialog::addInterface(const QModelIndex &parent)
 {
+    if (!_currentNetwork) {
+        QMessageBox::warning(this, tr("No Network"),
+                             tr("You must Add a Network First!"));
+        return;
+    }
+
     SelectCanInterfacesDialog dlg(0);
     BusInterfaceIdList list;
     if (dlg.selectInterfaces(*_backend, list, _currentNetwork->getReferencedBusInterfaces())) {
