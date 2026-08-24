@@ -54,6 +54,11 @@ private slots:
     void j1939SingleFrame();
     void j1939IgnoresStandardFrames();
     void j1939ExtractsAddressMetadata();
+    void j1939IgnoresDiagnosticPgnSoUdsCanClaimIt();
+
+    // --- UDS on 29-bit (extended) identifiers ---
+    void udsExtendedSingleFrameExtractsAddressMetadata();
+    void udsExtendedMultiFrameExtractsAddressMetadata();
 };
 
 // Original DecoderTest case: 0x02 0x10 0x01 -> DiagnosticSessionControl.
@@ -294,6 +299,70 @@ void DecodersTest::j1939ExtractsAddressMetadata()
     QCOMPARE(out.metadata.value("Source Address").toUInt(), 0x2Au);
     QCOMPARE(out.metadata.value("Priority").toUInt(), 6u);
     QCOMPARE(out.metadata.value("PDU Format").toUInt(), 0xFEu);
+}
+
+// Issue #38: J1939's catch-all "single-packet PGN" branch used to claim
+// every 29-bit frame outright (including PGN 0xDA00/0xDB00, which ISO 15765-4
+// UDS-on-CAN extended addressing reuses), so UdsDecoder was never reached and
+// the UDS Protocol window stayed empty for 29-bit setups. J1939 must yield on
+// these PGNs instead of completing a bogus "J1939" message.
+void DecodersTest::j1939IgnoresDiagnosticPgnSoUdsCanClaimIt()
+{
+    J1939Decoder decoder;
+    ProtocolMessage out;
+
+    BusMessage physical(0x18DAFEF9);   // SA 0xF9 -> DA 0xFE, physical addressing
+    physical.setExtended(true);
+    physical.setLength(8);
+    QCOMPARE(decoder.tryDecode(physical, out), DecodeStatus::Ignored);
+
+    BusMessage functional(0x18DBFEF9); // PGN 0xDB00, functional addressing
+    functional.setExtended(true);
+    functional.setLength(8);
+    QCOMPARE(decoder.tryDecode(functional, out), DecodeStatus::Ignored);
+}
+
+void DecodersTest::udsExtendedSingleFrameExtractsAddressMetadata()
+{
+    UdsDecoder decoder;
+    BusMessage msg(0x18DAFEF9);   // SA 0xF9 -> DA 0xFE
+    msg.setExtended(true);
+    msg.setLength(8);
+    msg.setByte(0, 0x02);   // single frame, 2 data bytes
+    msg.setByte(1, 0x10);   // SID 0x10
+    msg.setByte(2, 0x01);   // sub-function
+
+    ProtocolMessage out;
+    QCOMPARE(decoder.tryDecode(msg, out), DecodeStatus::Completed);
+    QCOMPARE(out.protocol, QString("uds"));
+    QVERIFY(!out.metadata.isEmpty());
+    QCOMPARE(out.metadata.value("Source Address").toUInt(), 0xF9u);
+    QCOMPARE(out.metadata.value("Target Address").toUInt(), 0xFEu);
+}
+
+void DecodersTest::udsExtendedMultiFrameExtractsAddressMetadata()
+{
+    UdsDecoder decoder;
+    ProtocolMessage out;
+
+    BusMessage ff(0x18DAFEF9);
+    ff.setExtended(true);
+    ff.setLength(8);
+    ff.setByte(0, 0x10);   // first frame
+    ff.setByte(1, 0x0A);   // total size 10
+    ff.setByte(2, 0x22);   // SID 0x22
+    for (int i = 3; i < 8; i++) { ff.setByte(static_cast<uint8_t>(i), static_cast<uint8_t>(i)); }
+    QCOMPARE(decoder.tryDecode(ff, out), DecodeStatus::Consumed);
+
+    BusMessage cf(0x18DAFEF9);
+    cf.setExtended(true);
+    cf.setLength(8);
+    cf.setByte(0, 0x21);   // consecutive frame, sequence 1
+    for (int i = 1; i < 6; i++) { cf.setByte(static_cast<uint8_t>(i), static_cast<uint8_t>(0xA0 + i)); }
+
+    QCOMPARE(decoder.tryDecode(cf, out), DecodeStatus::Completed);
+    QCOMPARE(out.metadata.value("Source Address").toUInt(), 0xF9u);
+    QCOMPARE(out.metadata.value("Target Address").toUInt(), 0xFEu);
 }
 
 QTEST_APPLESS_MAIN(DecodersTest)

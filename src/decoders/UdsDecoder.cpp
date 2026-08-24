@@ -16,7 +16,8 @@ static bool isValidUdsSid(uint8_t sid) noexcept
 }
 
 static void fillOutMsg(ProtocolMessage& outMsg, uint8_t sid, const QString& name,
-                       const QByteArray& payload, const QVector<BusMessage>& frames)
+                       const QByteArray& payload, const QVector<BusMessage>& frames,
+                       uint32_t canId, bool extended)
 {
     outMsg.payload  = payload;
     outMsg.rawFrames = frames;
@@ -24,6 +25,13 @@ static void fillOutMsg(ProtocolMessage& outMsg, uint8_t sid, const QString& name
     outMsg.timestamp = static_cast<uint64_t>(frames.first().getFloatTimestamp() * 1000000.0);
     outMsg.id   = sid;
     outMsg.name = name;
+
+    if (extended) {
+        // ISO 15765-4 extended addressing: SA in the low byte, target
+        // address (DA) in the PS byte of the 29-bit identifier.
+        outMsg.metadata["Source Address"] = canId & 0xFF;
+        outMsg.metadata["Target Address"] = (canId >> 8) & 0xFF;
+    }
 }
 
 DecodeStatus UdsDecoder::tryDecode(const BusMessage& frame, ProtocolMessage& outMsg) {
@@ -61,7 +69,7 @@ DecodeStatus UdsDecoder::tryDecode(const BusMessage& frame, ProtocolMessage& out
             for (int i = 0; i < size; ++i)
                 payload.append(frame.getByte(dataOffset + i));
 
-            fillOutMsg(outMsg, sid, interpretService(sid), payload, {frame});
+            fillOutMsg(outMsg, sid, interpretService(sid), payload, {frame}, id, frame.isExtended());
 
             if (sid == 0x7F) {
                 outMsg.type = MessageType::NegativeResponse;
@@ -125,7 +133,7 @@ DecodeStatus UdsDecoder::tryDecode(const BusMessage& frame, ProtocolMessage& out
                         return DecodeStatus::Ignored;
                     }
                     uint8_t sid = static_cast<uint8_t>(session.data.at(0));
-                    fillOutMsg(outMsg, sid, interpretService(sid), session.data, session.frames);
+                    fillOutMsg(outMsg, sid, interpretService(sid), session.data, session.frames, id, frame.isExtended());
 
                     if (sid == 0x7F) {
                         outMsg.type = MessageType::NegativeResponse;

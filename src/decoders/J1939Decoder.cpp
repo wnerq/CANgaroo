@@ -114,6 +114,15 @@ DecodeStatus J1939Decoder::tryDecode(const BusMessage& frame, ProtocolMessage& o
         uint8_t ps     = static_cast<uint8_t>((id >>  8) & 0xFF);
         bool    isPDU1 = pf < 240;
 
+        // PGNs 0xDA00/0xDB00 (PDU1) are reserved for peer-to-peer diagnostic
+        // communication. ISO 15765-4/UDS-on-CAN extended addressing reuses
+        // this exact 29-bit ID scheme (e.g. 0x18DAxxyy), so single frames
+        // here are UDS traffic, not generic J1939 data - let UdsDecoder
+        // have a chance at them instead of swallowing them as J1939.
+        if (pf == 0xDA || pf == 0xDB) {
+            return DecodeStatus::Ignored;
+        }
+
         outMsg.payload = QByteArray();
         for (int i = 0; i < frame.getLength(); ++i)
             outMsg.payload.append(frame.getByte(i));
