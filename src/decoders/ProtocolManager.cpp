@@ -10,6 +10,13 @@ ProtocolManager::ProtocolManager() {
 DecodeStatus ProtocolManager::processFrame(const BusMessage& frame, ProtocolMessage& outMsg) {
     DecodeStatus status = DecodeStatus::Ignored;
 
+    // RX and TX traffic are decoded independently (UdsDecoder/J1939Decoder key
+    // their reassembly sessions by direction) so that a UDS/J1939 request
+    // CANgaroo transmits itself decodes just like one it observes as RX, and
+    // so that an interface which loops transmitted frames back to its own RX
+    // path (SocketCAN/vcan, some real adapters) can't have a duplicate
+    // delivery of the same frame corrupt the other direction's session.
+
     // LIN diagnostic frames (ISO 17987): 0x3C = master request, 0x3D = slave response
     // On-bus layout: [NAD, PCI, SID, data...] = 8 bytes. Strip NAD and pass the rest
     // (PCI + payload) to the UDS decoder as an ISO 15765-2 single-frame transport PDU.

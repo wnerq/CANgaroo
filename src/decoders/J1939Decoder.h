@@ -23,9 +23,10 @@ private:
         uint8_t da = 0; // 0xFF for BAM (broadcast), specific address for RTS
     };
 
-    // Key is (SA << 8) | DA, which handles concurrent BAM and RTS sessions from the same SA
-    QMap<uint32_t, J1939Session> m_sessions;
+    // Key folds in SA, DA (handles concurrent BAM/RTS sessions from the same
+    // SA), RX/TX direction, and interface/channel -- see tpSessionKey().
+    QMap<uint64_t, J1939Session> m_sessions;
 
-    static uint32_t tpSessionKey(uint8_t sa, uint8_t da) noexcept;
+    static uint64_t tpSessionKey(uint8_t sa, uint8_t da, bool isRX, uint16_t interfaceId) noexcept;
     uint32_t extractPgn(uint32_t id);
 };

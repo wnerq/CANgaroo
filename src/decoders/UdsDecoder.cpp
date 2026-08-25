@@ -3,10 +3,26 @@
 UdsDecoder::UdsDecoder() {}
 
 static constexpr uint32_t k_extendedSessionFlag = 0x80000000u;
+static constexpr uint32_t k_txSessionFlag       = 0x40000000u;
 
-static uint32_t sessionKey(uint32_t id, bool extended) noexcept
+// RX and TX traffic on the same ID get independent session slots. Without
+// this, an interface that loops transmitted frames back on the RX path
+// (SocketCAN/vcan, some real adapters) delivers every sent frame twice, and
+// a duplicate consecutive frame trips the strict sequence-number check below
+// and kills the session. Keying by direction also lets CANgaroo decode a UDS
+// request it transmits itself (no RX counterpart exists for that direction
+// when talking to a real external device) independently of whatever it
+// receives back.
+//
+// The interface/channel is folded in too: diagnostic IDs (0x7E0/0x7E8,
+// 0x18DAxxyy, ...) are commonly reused across separate buses, so without a
+// per-channel key an interleaved frame from a second channel would look
+// like a sequence-number violation and kill the first channel's session.
+static uint64_t sessionKey(uint32_t id, bool extended, bool isRX, uint16_t interfaceId) noexcept
 {
-    return extended ? (id | k_extendedSessionFlag) : id;
+    uint32_t key32 = extended ? (id | k_extendedSessionFlag) : id;
+    if (!isRX) key32 |= k_txSessionFlag;
+    return (static_cast<uint64_t>(interfaceId) << 32) | key32;
 }
 
 // UDS service IDs begin at 0x10. Anything below that cannot be a valid SID.
@@ -41,7 +57,7 @@ DecodeStatus UdsDecoder::tryDecode(const BusMessage& frame, ProtocolMessage& out
 
     uint8_t type = (frame.getByte(0) >> 4) & 0x0F;
     uint32_t id  = frame.getId();
-    uint32_t key = sessionKey(id, frame.isExtended());
+    uint64_t key = sessionKey(id, frame.isExtended(), frame.isRX(), frame.getInterfaceId());
 
     if (frame.isExtended()) {
         uint8_t pf = (id >> 16) & 0xFF;

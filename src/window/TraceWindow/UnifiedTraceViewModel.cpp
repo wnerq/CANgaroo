@@ -185,9 +185,7 @@ void UnifiedTraceViewModel::processNewMessages()
 
         bool shouldAppend = false;
         if (status == DecodeStatus::Completed) {
-            if (m_category == Cat_All) {
-                shouldAppend = true;
-            } else if (pmsg.protocol.compare("uds", Qt::CaseInsensitive) == 0 && m_category == Cat_UDS) {
+            if (pmsg.protocol.compare("uds", Qt::CaseInsensitive) == 0 && m_category == Cat_UDS) {
                 if (m_aggregating) {
                     uint64_t key = getUdsKey(pmsg);
                     if (m_udsAggregatedMap.count(key)) {
@@ -233,37 +231,41 @@ void UnifiedTraceViewModel::processNewMessages()
                     m_udsAggregatedMap[getUdsKey(pmsg)] = item;
                 }
             }
-        } else if (status == DecodeStatus::Ignored || status == DecodeStatus::Consumed) {
-            if (m_category == Cat_All) {
-                auto item = std::make_shared<UnifiedTraceItem>(msg, m_rootItem.get());
-                uint64_t ts = static_cast<uint64_t>(msg.getFloatTimestamp() * 1000000.0);
-                if (m_firstTimestamp == 0) m_firstTimestamp = ts;
-                item->setTimestamp(ts);
-                item->setGlobalIndex(m_globalIndexCounter++);
+        }
 
-                uint64_t dkey = makeDeltaKey(msg);
-                item->setPrevSameIdTimestamp(m_prevTimestampByKey.value(dkey, 0));
-                m_prevTimestampByKey[dkey] = ts;
+        // The Monitor ("All") tab is a raw trace view: every physical frame shows
+        // up here regardless of whether a higher-level protocol decoder consumed
+        // or completed it. Decoded protocol summaries belong only in the
+        // dedicated UDS/J1939 tabs, handled above.
+        if (m_category == Cat_All) {
+            auto item = std::make_shared<UnifiedTraceItem>(msg, m_rootItem.get());
+            uint64_t ts = static_cast<uint64_t>(msg.getFloatTimestamp() * 1000000.0);
+            if (m_firstTimestamp == 0) m_firstTimestamp = ts;
+            item->setTimestamp(ts);
+            item->setGlobalIndex(m_globalIndexCounter++);
 
-                item->setPrevSameIdFrame(m_prevMessageByKey.value(dkey));
-                m_prevMessageByKey[dkey] = msg;
+            uint64_t dkey = makeDeltaKey(msg);
+            item->setPrevSameIdTimestamp(m_prevTimestampByKey.value(dkey, 0));
+            m_prevTimestampByKey[dkey] = ts;
 
-                if (msg.busType() == BusType::LIN) {
-                    LinFrame *linFrame = backend()->findLinFrame(msg);
-                    if (linFrame) {
-                        for (int s = 0; s < linFrame->signalList().size(); ++s)
-                            item->appendChild(std::make_shared<UnifiedTraceItem>(s, item.get()));
-                    }
-                } else {
-                    CanDbMessage *dbmsg = backend()->findDbMessage(msg);
-                    if (dbmsg) {
-                        for (int s = 0; s < dbmsg->getSignals().length(); ++s)
-                            item->appendChild(std::make_shared<UnifiedTraceItem>(s, item.get()));
-                    }
+            item->setPrevSameIdFrame(m_prevMessageByKey.value(dkey));
+            m_prevMessageByKey[dkey] = msg;
+
+            if (msg.busType() == BusType::LIN) {
+                LinFrame *linFrame = backend()->findLinFrame(msg);
+                if (linFrame) {
+                    for (int s = 0; s < linFrame->signalList().size(); ++s)
+                        item->appendChild(std::make_shared<UnifiedTraceItem>(s, item.get()));
                 }
-
-                newItems.append(item);
+            } else {
+                CanDbMessage *dbmsg = backend()->findDbMessage(msg);
+                if (dbmsg) {
+                    for (int s = 0; s < dbmsg->getSignals().length(); ++s)
+                        item->appendChild(std::make_shared<UnifiedTraceItem>(s, item.get()));
+                }
             }
+
+            newItems.append(item);
         }
         m_lastProcessedIndex = i;
     }

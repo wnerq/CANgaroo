@@ -33,6 +33,7 @@
 #include "core/BusMessage.h"
 #include "decoders/J1939Decoder.h"
 #include "decoders/UdsDecoder.h"
+#include "decoders/ProtocolManager.h"
 
 class DecodersTest : public QObject
 {
@@ -59,6 +60,12 @@ private slots:
     // --- UDS on 29-bit (extended) identifiers ---
     void udsExtendedSingleFrameExtractsAddressMetadata();
     void udsExtendedMultiFrameExtractsAddressMetadata();
+
+    // --- ProtocolManager ---
+    void protocolManagerDecodesTxAndRxIndependently();
+    void protocolManagerLoopbackDuplicateOnOneDirectionDoesNotCorruptTheOther();
+    void protocolManagerDecodesGenuineRxMultiFrame();
+    void protocolManagerKeepsSessionsSeparatePerChannel();
 };
 
 // Original DecoderTest case: 0x02 0x10 0x01 -> DiagnosticSessionControl.
@@ -363,6 +370,178 @@ void DecodersTest::udsExtendedMultiFrameExtractsAddressMetadata()
     QCOMPARE(decoder.tryDecode(cf, out), DecodeStatus::Completed);
     QCOMPARE(out.metadata.value("Source Address").toUInt(), 0xF9u);
     QCOMPARE(out.metadata.value("Target Address").toUInt(), 0xFEu);
+}
+
+// Issue #38 follow-up: interfaces that loop transmitted frames back to their
+// own RX path (SocketCAN/vcan, and reportedly some real adapters) cause every
+// frame CANgaroo itself sends to reach ProtocolManager twice: once as the
+// synthetic TX record BusInterface::sendMessage() appends, once as its RX
+// echo. Feeding a duplicate of the same ISO-TP consecutive frame through
+// UdsDecoder trips its strict sequence-number check, which nukes the whole
+// session -- so every CF after the duplicate is left undecoded. Reproduces
+// exactly the exchange from the issue #38 screenshot with the FF and CF1
+// artificially duplicated as TX frames, as observed via CANgaroo's Script
+// window on a vcan loopback interface.
+// Issue #38 follow-up: a UDS request CANgaroo transmits itself must decode
+// just like one it observes as RX -- a real external device never loops
+// frames back, so the TX side alone has to carry the whole ISO-TP session.
+void DecodersTest::protocolManagerDecodesTxAndRxIndependently()
+{
+    ProtocolManager mgr;
+    ProtocolMessage out;
+
+    auto makeFrame = [](uint32_t id, const QVector<uint8_t>& data, bool rx) {
+        BusMessage msg(id);
+        msg.setExtended(true);
+        msg.setRX(rx);
+        msg.setLength(static_cast<uint8_t>(data.size()));
+        for (int i = 0; i < data.size(); ++i) msg.setByte(static_cast<uint8_t>(i), data[i]);
+        return msg;
+    };
+
+    const uint32_t responseId = 0x18DAF9FE;
+
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x10, 0x21, 0x62, 0xF1, 0x80, 0x4D, 0x33, 0x30}, false), out),
+             DecodeStatus::Consumed);
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x21, 0x4C, 0x2E, 0x5F, 0x5F, 0x46, 0x42, 0x4C}, false), out),
+             DecodeStatus::Consumed);
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x22, 0x41, 0x2E, 0x42, 0x2E, 0x30, 0x30, 0x2E}, false), out),
+             DecodeStatus::Consumed);
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x23, 0x30, 0x30, 0x31, 0x2E, 0x30, 0x30, 0x2E}, false), out),
+             DecodeStatus::Consumed);
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x24, 0x65, 0x6C, 0x6F, 0x62, 0x61, 0x75, 0xFF}, false), out),
+             DecodeStatus::Completed);
+    QCOMPARE(out.protocol, QString("uds"));
+}
+
+// Issue #38 follow-up: interfaces that loop transmitted frames back to their
+// own RX path (SocketCAN/vcan, some real adapters) deliver every TX'd frame
+// twice -- once as the synthetic TX record BusInterface::sendMessage()
+// appends, once as its genuine RX echo. RX and TX sessions on the same ID
+// are tracked independently, so a duplicate on one side must not glitch or
+// kill the other side's sequence-number tracking -- both must still be able
+// to complete on their own.
+void DecodersTest::protocolManagerLoopbackDuplicateOnOneDirectionDoesNotCorruptTheOther()
+{
+    ProtocolManager mgr;
+    ProtocolMessage out;
+
+    auto makeFrame = [](uint32_t id, const QVector<uint8_t>& data, bool rx) {
+        BusMessage msg(id);
+        msg.setExtended(true);
+        msg.setRX(rx);
+        msg.setLength(static_cast<uint8_t>(data.size()));
+        for (int i = 0; i < data.size(); ++i) msg.setByte(static_cast<uint8_t>(i), data[i]);
+        return msg;
+    };
+
+    const uint32_t responseId = 0x18DAF9FE;
+
+    // FF and CF1 each sent then looped back.
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x10, 0x21, 0x62, 0xF1, 0x80, 0x4D, 0x33, 0x30}, false), out),
+             DecodeStatus::Consumed);
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x10, 0x21, 0x62, 0xF1, 0x80, 0x4D, 0x33, 0x30}, true), out),
+             DecodeStatus::Consumed);
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x21, 0x4C, 0x2E, 0x5F, 0x5F, 0x46, 0x42, 0x4C}, false), out),
+             DecodeStatus::Consumed);
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x21, 0x4C, 0x2E, 0x5F, 0x5F, 0x46, 0x42, 0x4C}, true), out),
+             DecodeStatus::Consumed);
+
+    // The RX side alone must still complete despite the interleaved TX duplicates.
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x22, 0x41, 0x2E, 0x42, 0x2E, 0x30, 0x30, 0x2E}, true), out),
+             DecodeStatus::Consumed);
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x23, 0x30, 0x30, 0x31, 0x2E, 0x30, 0x30, 0x2E}, true), out),
+             DecodeStatus::Consumed);
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x24, 0x65, 0x6C, 0x6F, 0x62, 0x61, 0x75, 0xFF}, true), out),
+             DecodeStatus::Completed);
+    QCOMPARE(out.protocol, QString("uds"));
+
+    // The TX side, independently, must still be alive and complete too.
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x22, 0x41, 0x2E, 0x42, 0x2E, 0x30, 0x30, 0x2E}, false), out),
+             DecodeStatus::Consumed);
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x23, 0x30, 0x30, 0x31, 0x2E, 0x30, 0x30, 0x2E}, false), out),
+             DecodeStatus::Consumed);
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x24, 0x65, 0x6C, 0x6F, 0x62, 0x61, 0x75, 0xFF}, false), out),
+             DecodeStatus::Completed);
+    QCOMPARE(out.protocol, QString("uds"));
+}
+
+void DecodersTest::protocolManagerDecodesGenuineRxMultiFrame()
+{
+    ProtocolManager mgr;
+    ProtocolMessage out;
+
+    auto makeFrame = [](uint32_t id, const QVector<uint8_t>& data) {
+        BusMessage msg(id);
+        msg.setExtended(true);
+        msg.setRX(true);
+        msg.setLength(static_cast<uint8_t>(data.size()));
+        for (int i = 0; i < data.size(); ++i) msg.setByte(static_cast<uint8_t>(i), data[i]);
+        return msg;
+    };
+
+    const uint32_t responseId = 0x18DAF9FE;
+
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x10, 0x21, 0x62, 0xF1, 0x80, 0x4D, 0x33, 0x30}), out),
+             DecodeStatus::Consumed);
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x21, 0x4C, 0x2E, 0x5F, 0x5F, 0x46, 0x42, 0x4C}), out),
+             DecodeStatus::Consumed);
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x22, 0x41, 0x2E, 0x42, 0x2E, 0x30, 0x30, 0x2E}), out),
+             DecodeStatus::Consumed);
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x23, 0x30, 0x30, 0x31, 0x2E, 0x30, 0x30, 0x2E}), out),
+             DecodeStatus::Consumed);
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x24, 0x65, 0x6C, 0x6F, 0x62, 0x61, 0x75, 0xFF}), out),
+             DecodeStatus::Completed);
+    QCOMPARE(out.protocol, QString("uds"));
+}
+
+// Diagnostic IDs (0x7E0/0x7E8, 0x18DAxxyy, ...) are commonly reused across
+// separate CAN buses. Without a per-channel session key, an interleaved
+// frame from a second channel would look like a sequence-number violation
+// and kill the first channel's session -- verify both channels reassemble
+// independently even when their consecutive frames interleave on the wire.
+void DecodersTest::protocolManagerKeepsSessionsSeparatePerChannel()
+{
+    ProtocolManager mgr;
+    ProtocolMessage out;
+
+    auto makeFrame = [](uint32_t id, const QVector<uint8_t>& data, uint16_t interfaceId) {
+        BusMessage msg(id);
+        msg.setExtended(true);
+        msg.setRX(true);
+        msg.setInterfaceId(interfaceId);
+        msg.setLength(static_cast<uint8_t>(data.size()));
+        for (int i = 0; i < data.size(); ++i) msg.setByte(static_cast<uint8_t>(i), data[i]);
+        return msg;
+    };
+
+    const uint32_t responseId = 0x18DAF9FE;   // same ID reused on both channels
+
+    // FF on channel 0, then FF on channel 1, then their CFs interleaved.
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x10, 0x21, 0x62, 0xF1, 0x80, 0x4D, 0x33, 0x30}, 0), out),
+             DecodeStatus::Consumed);
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x10, 0x21, 0x62, 0xF1, 0x80, 0x4D, 0x33, 0x30}, 1), out),
+             DecodeStatus::Consumed);
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x21, 0x4C, 0x2E, 0x5F, 0x5F, 0x46, 0x42, 0x4C}, 0), out),
+             DecodeStatus::Consumed);
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x21, 0x4C, 0x2E, 0x5F, 0x5F, 0x46, 0x42, 0x4C}, 1), out),
+             DecodeStatus::Consumed);
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x22, 0x41, 0x2E, 0x42, 0x2E, 0x30, 0x30, 0x2E}, 0), out),
+             DecodeStatus::Consumed);
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x22, 0x41, 0x2E, 0x42, 0x2E, 0x30, 0x30, 0x2E}, 1), out),
+             DecodeStatus::Consumed);
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x23, 0x30, 0x30, 0x31, 0x2E, 0x30, 0x30, 0x2E}, 0), out),
+             DecodeStatus::Consumed);
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x23, 0x30, 0x30, 0x31, 0x2E, 0x30, 0x30, 0x2E}, 1), out),
+             DecodeStatus::Consumed);
+
+    // Both channels must independently complete.
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x24, 0x65, 0x6C, 0x6F, 0x62, 0x61, 0x75, 0xFF}, 0), out),
+             DecodeStatus::Completed);
+    QCOMPARE(out.protocol, QString("uds"));
+    QCOMPARE(mgr.processFrame(makeFrame(responseId, {0x24, 0x65, 0x6C, 0x6F, 0x62, 0x61, 0x75, 0xFF}, 1), out),
+             DecodeStatus::Completed);
+    QCOMPARE(out.protocol, QString("uds"));
 }
 
 QTEST_APPLESS_MAIN(DecodersTest)

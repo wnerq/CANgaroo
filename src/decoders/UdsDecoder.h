@@ -20,7 +20,7 @@ private:
         uint32_t rxId = 0;
     };
 
-    QMap<uint32_t, IsotpSession> m_sessions;
+    QMap<uint64_t, IsotpSession> m_sessions;
 
     QString interpretService(uint8_t sid);
     QString interpretNrc(uint8_t nrc);

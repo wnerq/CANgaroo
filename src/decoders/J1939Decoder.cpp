@@ -43,7 +43,7 @@ DecodeStatus J1939Decoder::tryDecode(const BusMessage& frame, ProtocolMessage& o
                                  | (static_cast<uint32_t>(frame.getByte(7)) << 16);
 
             // Key encodes both SA and DA to handle concurrent sessions from the same SA
-            uint32_t key = tpSessionKey(sa, da);
+            uint64_t key = tpSessionKey(sa, da, frame.isRX(), frame.getInterfaceId());
             J1939Session& session  = m_sessions[key];
             session.pgn            = targetPgn;
             session.expectedSize   = size;
@@ -57,14 +57,14 @@ DecodeStatus J1939Decoder::tryDecode(const BusMessage& frame, ProtocolMessage& o
         }
 
         // CTS (17), End of Message Ack (19), Connection Abort (255)
-        uint32_t key = tpSessionKey(sa, da);
+        uint64_t key = tpSessionKey(sa, da, frame.isRX(), frame.getInterfaceId());
         if (controlByte == 255 && m_sessions.contains(key)) { // Abort
             m_sessions.remove(key);
         }
         return m_sessions.contains(key) ? DecodeStatus::Consumed : DecodeStatus::Ignored;
 
     } else if (pgn == 0x00EB00) { // TP.DT
-        uint32_t key = tpSessionKey(sa, da);
+        uint64_t key = tpSessionKey(sa, da, frame.isRX(), frame.getInterfaceId());
         if (m_sessions.contains(key)) {
             J1939Session& session = m_sessions[key];
 
@@ -157,9 +157,16 @@ void J1939Decoder::reset() {
     m_sessions.clear();
 }
 
-uint32_t J1939Decoder::tpSessionKey(uint8_t sa, uint8_t da) noexcept
+uint64_t J1939Decoder::tpSessionKey(uint8_t sa, uint8_t da, bool isRX, uint16_t interfaceId) noexcept
 {
-    return (static_cast<uint32_t>(sa) << 8) | da;
+    // RX and TX traffic get independent session slots -- see UdsDecoder's
+    // sessionKey() for why (loopback interfaces deliver every sent frame
+    // twice, and CANgaroo's own outgoing requests have no RX counterpart
+    // when talking to a real external device). The interface/channel is
+    // folded in too, since SA/DA pairs can collide across separate buses.
+    uint32_t key32 = (static_cast<uint32_t>(sa) << 8) | da;
+    if (!isRX) key32 |= 0x10000u;
+    return (static_cast<uint64_t>(interfaceId) << 32) | key32;
 }
 
 uint32_t J1939Decoder::extractPgn(uint32_t id) {
