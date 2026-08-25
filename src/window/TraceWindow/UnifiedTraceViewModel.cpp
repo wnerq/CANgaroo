@@ -449,20 +449,8 @@ QVariant UnifiedTraceViewModel::data_DisplayRole(const QModelIndex &index, [[may
                 return pmsg.protocol.toUpper();
             case column_name: return pmsg.name;
             case column_comment: return pmsg.description;
-            case column_data: {
-                static const char hex[] = "0123456789ABCDEF";
-                const int sz = pmsg.payload.size();
-                if (sz == 0) return QString();
-                QString result(sz * 3 - 1, ' ');
-                QChar *p = result.data();
-                for (int i = 0; i < sz; ++i) {
-                    uint8_t b = static_cast<uint8_t>(pmsg.payload.at(i));
-                    if (i > 0) ++p; // skip the pre-filled space
-                    *p++ = QLatin1Char(hex[b >> 4]);
-                    *p++ = QLatin1Char(hex[b & 0x0F]);
-                }
-                return result;
-            }
+            case column_data:
+                return BusMessage::formatDataBytes(pmsg.payload, dataAsciiMode());
             case column_dlc: return pmsg.payload.size();
             case column_direction: return pmsg.rawFrames.isEmpty() ? "" : (pmsg.rawFrames.first().isRX() ? tr("RX") : tr("TX"));
             case column_channel: return pmsg.rawFrames.isEmpty() ? "" : interfaceName(pmsg.rawFrames.first().getInterfaceId());
@@ -530,7 +518,7 @@ QVariant UnifiedTraceViewModel::data_DisplayRole(const QModelIndex &index, [[may
             }
             case column_canid: return QString("0x%1").arg(msg.getId(), 0, 16).toUpper();
             case column_dlc: return msg.getLength();
-            case column_data: return msg.getDataHexString();
+            case column_data: return dataAsciiMode() ? msg.getDataAsciiString() : msg.getDataHexString();
             case column_name:
                 if (msg.busType() == BusType::LIN) {
                     if (msg.isLinSleepFrame())  return tr("Sleep");

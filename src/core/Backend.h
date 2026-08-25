@@ -96,6 +96,7 @@ public:
     pLinDb loadLdf(QString filename, QString *errorMsg = nullptr);
 
     void notifyDecoderConfigChanged();
+    void notifyDisplayConfigChanged();
 
     void clearLog();
     LogModel &getLogModel() const;
@@ -105,6 +106,7 @@ signals:
     void endMeasurement();
 
     void onSetupChanged();
+    void onDisplayConfigChanged();
 
     void onClearTraceRequested();
 

@@ -1469,6 +1469,11 @@ void MainWindow::showSettingsDialog()
     // Apply trace window defaults.
     settings.setValue("tracewindow/defaultViewMode",      dlg.defaultTraceViewMode());
     settings.setValue("tracewindow/defaultTimestampMode", dlg.defaultTimestampMode());
+
+    // Apply Data column display mode (hex/ASCII) -- takes effect immediately
+    // on already-open trace windows, not just new ones.
+    settings.setValue("tracewindow/dataAsciiMode", dlg.dataAsciiModeEnabled());
+    backend().notifyDisplayConfigChanged();
 }
 
 #if defined(_WIN32)

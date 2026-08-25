@@ -51,6 +51,9 @@ private slots:
 
     void errorFrameFlagRoundTrips();
     void fdAndBrsFlagsAreSeparateFromId();
+
+    void dataAsciiStringMarksNonPrintableBytes();
+    void formatDataBytesMatchesPerInstanceFormatters();
 };
 
 void BusMessageFrameTest::defaultConstructedIsEmpty()
@@ -260,6 +263,37 @@ void BusMessageFrameTest::fdAndBrsFlagsAreSeparateFromId()
     QVERIFY(msg.isFD());
     QVERIFY(msg.isBRS());
     QCOMPARE(msg.getId(), 0x1FFFFFFFu);
+}
+
+// Settings "Data display: Hex / ASCII" feature: non-printable bytes must
+// render as '.' rather than raw control characters, one token per byte
+// (space-separated) so DataColumnDelegate's per-byte coloring still works.
+void BusMessageFrameTest::dataAsciiStringMarksNonPrintableBytes()
+{
+    BusMessage msg;
+    msg.setLength(4);
+    msg.setByte(0, 'A');
+    msg.setByte(1, 0x00);
+    msg.setByte(2, '!');
+    msg.setByte(3, 0x7F);
+
+    QCOMPARE(msg.getDataAsciiString(), QString("A . ! . "));
+}
+
+void BusMessageFrameTest::formatDataBytesMatchesPerInstanceFormatters()
+{
+    BusMessage msg;
+    msg.setLength(3);
+    msg.setByte(0, 0x01);
+    msg.setByte(1, 'B');
+    msg.setByte(2, 0xFF);
+
+    const QByteArray data(reinterpret_cast<const char*>(msg.getData()), msg.getLength());
+
+    QCOMPARE(BusMessage::formatDataBytes(data, false), msg.getDataHexString().trimmed());
+    QCOMPARE(BusMessage::formatDataBytes(data, true), msg.getDataAsciiString());
+    QCOMPARE(BusMessage::formatDataBytes(QByteArray(), false), QString());
+    QCOMPARE(BusMessage::formatDataBytes(QByteArray(), true), QString());
 }
 
 QTEST_APPLESS_MAIN(BusMessageFrameTest)

@@ -45,6 +45,7 @@ public:
     QString preferredSaveFormat() const;
     int defaultTraceViewMode() const;
     int defaultTimestampMode() const;
+    bool dataAsciiModeEnabled() const;
 
 private:
     QComboBox *m_themeCombo;
@@ -52,6 +53,7 @@ private:
     QComboBox *m_saveFormatCombo;
     QComboBox *m_defaultTraceViewCombo;
     QComboBox *m_defaultTimestampCombo;
+    QComboBox *m_dataDisplayCombo;
     QCheckBox *m_nativeStylingCheck;
     QCheckBox *m_restoreWindowCheck;
     QCheckBox *m_clearTraceOnStartCheck;

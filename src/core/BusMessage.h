@@ -25,6 +25,7 @@
 #include <cstdint>
 
 #include <QString>
+#include <QByteArray>
 #include <QDateTime>
 #include <QFlags>
 
@@ -140,7 +141,13 @@ public:
 
     [[nodiscard]] QString getIdString() const;
     [[nodiscard]] QString getDataHexString() const;
+    [[nodiscard]] QString getDataAsciiString() const;
     [[nodiscard]] QString getErrorFlagsString() const;
+
+    // General-purpose byte formatter for payloads that aren't a full BusMessage
+    // (e.g. a decoded ProtocolMessage's payload), sharing the same hex/ASCII
+    // rendering used by getDataHexString()/getDataAsciiString().
+    [[nodiscard]] static QString formatDataBytes(const QByteArray &data, bool ascii);
 
 private:
     uint32_t _raw_id;

@@ -475,6 +475,58 @@ QString BusMessage::getDataHexString() const
     return outstr;
 }
 
+QString BusMessage::getDataAsciiString() const
+{
+    if(getLength() == 0)
+        return QString();
+
+    if(isErrorFrame())
+        return getErrorFlagsString();
+
+    int len = getLength();
+    QString outstr(len * 2, Qt::Uninitialized);
+    QChar *p = outstr.data();
+    for(int i = 0; i < len; i++)
+    {
+        uint8_t b = getByte(i);
+        *p++ = (b >= 0x20 && b < 0x7F) ? QLatin1Char(static_cast<char>(b)) : QLatin1Char('.');
+        *p++ = QLatin1Char(' ');
+    }
+
+    return outstr;
+}
+
+QString BusMessage::formatDataBytes(const QByteArray &data, bool ascii)
+{
+    const int sz = data.size();
+    if (sz == 0) return QString();
+
+    if (ascii)
+    {
+        QString result(sz * 2, Qt::Uninitialized);
+        QChar *p = result.data();
+        for (int i = 0; i < sz; ++i)
+        {
+            uint8_t b = static_cast<uint8_t>(data.at(i));
+            *p++ = (b >= 0x20 && b < 0x7F) ? QLatin1Char(static_cast<char>(b)) : QLatin1Char('.');
+            *p++ = QLatin1Char(' ');
+        }
+        return result;
+    }
+
+    static const char hex[] = "0123456789ABCDEF";
+    QString result(sz * 3 - 1, ' ');
+    QChar *p = result.data();
+    for (int i = 0; i < sz; ++i)
+    {
+        uint8_t b = static_cast<uint8_t>(data.at(i));
+        if (i > 0) ++p; // skip the pre-filled space
+        *p++ = QLatin1Char(hex[b >> 4]);
+        *p++ = QLatin1Char(hex[b & 0x0F]);
+    }
+    return result;
+}
+
 QString BusMessage::getErrorFlagsString() const
 {
     static const struct { BusError flag; const char *name; } kNames[] = {

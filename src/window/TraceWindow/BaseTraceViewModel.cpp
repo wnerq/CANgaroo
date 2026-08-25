@@ -26,6 +26,7 @@
 #include <QDateTime>
 #include <QLocale>
 #include <QColor>
+#include <QSettings>
 
 #include "core/Backend.h"
 #include "core/BusTrace.h"
@@ -39,11 +40,16 @@
 BaseTraceViewModel::BaseTraceViewModel(Backend &backend)
 {
     _backend = &backend;
+    _dataAsciiMode = QSettings().value("tracewindow/dataAsciiMode", false).toBool();
 
     // Interface names are stable while a setup is active; drop cached names
     // whenever interfaces may be re-enumerated
     connect(&backend, &Backend::onSetupChanged, this, [this]() { _interfaceNameCache.clear(); });
     connect(&backend, &Backend::beginMeasurement, this, [this]() { _interfaceNameCache.clear(); });
+
+    connect(&backend, &Backend::onDisplayConfigChanged, this, [this]() {
+        setDataAsciiMode(QSettings().value("tracewindow/dataAsciiMode", false).toBool());
+    });
 }
 
 QString BaseTraceViewModel::interfaceName(BusInterfaceId id) const
@@ -169,6 +175,18 @@ void BaseTraceViewModel::setTimestampMode(timestamp_mode_t timestampMode)
     _timestampMode = timestampMode;
 }
 
+bool BaseTraceViewModel::dataAsciiMode() const
+{
+    return _dataAsciiMode;
+}
+
+void BaseTraceViewModel::setDataAsciiMode(bool ascii)
+{
+    if (_dataAsciiMode == ascii) { return; }
+    _dataAsciiMode = ascii;
+    emit layoutChanged();
+}
+
 QVariant BaseTraceViewModel::formatTimestamp(timestamp_mode_t mode, const BusMessage &currentMsg, const BusMessage &lastMsg) const
 {
 
@@ -267,7 +285,7 @@ QVariant BaseTraceViewModel::data_DisplayRole_Message(const QModelIndex &index, 
             return currentMsg.getLength();
 
         case column_data:
-            return currentMsg.getDataHexString();
+            return _dataAsciiMode ? currentMsg.getDataAsciiString() : currentMsg.getDataHexString();
 
         case column_comment:
         {

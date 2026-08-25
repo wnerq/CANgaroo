@@ -88,6 +88,11 @@ void Backend::notifyDecoderConfigChanged()
     emit onSetupChanged();
 }
 
+void Backend::notifyDisplayConfigChanged()
+{
+    emit onDisplayConfigChanged();
+}
+
 bool Backend::startMeasurement()
 {
     log_info(tr("Starting measurement"));

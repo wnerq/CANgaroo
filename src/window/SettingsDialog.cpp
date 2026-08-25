@@ -135,6 +135,12 @@ SettingsDialog::SettingsDialog(QSettings &settings, QActionGroup *languageGroup,
     }
     formTrace->addRow(tr("Default timestamp:"), m_defaultTimestampCombo);
 
+    m_dataDisplayCombo = new QComboBox(grpTrace);
+    m_dataDisplayCombo->addItem(tr("Hex"), 0);
+    m_dataDisplayCombo->addItem(tr("ASCII"), 1);
+    m_dataDisplayCombo->setCurrentIndex(settings.value("tracewindow/dataAsciiMode", false).toBool() ? 1 : 0);
+    formTrace->addRow(tr("Data display:"), m_dataDisplayCombo);
+
     m_saveFormatCombo = new QComboBox(grpTrace);
     const QStringList saveFormats = {
         "Vector ASC (*.asc)",
@@ -223,4 +229,9 @@ int SettingsDialog::defaultTraceViewMode() const
 int SettingsDialog::defaultTimestampMode() const
 {
     return m_defaultTimestampCombo->currentData().toInt();
+}
+
+bool SettingsDialog::dataAsciiModeEnabled() const
+{
+    return m_dataDisplayCombo->currentData().toInt() == 1;
 }
