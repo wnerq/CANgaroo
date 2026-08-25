@@ -21,6 +21,7 @@
 #include "core/ConfigurableWidget.h"
 #include "core/Backend.h"
 #include <QDateTime>
+#include <thread>
 
 class PythonEngine;
 class QPlainTextEdit;
@@ -72,7 +73,10 @@ private:
     QLineEdit *_fileLabel;
     QString _scriptFilePath;
     QDateTime _lastLoadTime;
+    bool _stopInProgress = false;
+    std::thread _stopThread;
 
     void loadScriptFile(const QString &filename);
     void reloadIfModified();
+    void requestStopAsync();
 };

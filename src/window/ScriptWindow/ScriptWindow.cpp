@@ -30,6 +30,7 @@
 #include <QDomDocument>
 #include <QFileInfo>
 #include <QFont>
+#include <thread>
 
 #include "core/PythonEngine.h"
 #include "core/Backend.h"
@@ -127,6 +128,12 @@ ScriptWindow::ScriptWindow(QWidget *parent, Backend &backend)
 
 ScriptWindow::~ScriptWindow()
 {
+    // Join any in-flight async stop (see requestStopAsync()) before calling
+    // stopScript() again -- it and _engine must not still be in use by that
+    // thread when Qt deletes _engine as our child right after this destructor
+    // body returns. If no async stop is in flight this call is synchronous,
+    // same as before; if one already finished, it's a cheap no-op.
+    if (_stopThread.joinable()) { _stopThread.join(); }
     _engine->stopScript();
 }
 
@@ -150,7 +157,7 @@ void ScriptWindow::onRunClicked()
 
 void ScriptWindow::onStopClicked()
 {
-    _engine->stopScript();
+    requestStopAsync();
 }
 
 void ScriptWindow::onClearClicked()
@@ -236,6 +243,7 @@ void ScriptWindow::onScriptStarted()
 
 void ScriptWindow::onScriptFinished()
 {
+    _stopInProgress = false;
     _btnRun->setEnabled(true);
     _btnStop->setEnabled(false);
     _editor->setReadOnly(false);
@@ -255,8 +263,30 @@ void ScriptWindow::onMeasurementStopped()
 {
     if (_engine->isRunning())
     {
-        _engine->stopScript();
+        requestStopAsync();
     }
+}
+
+// PythonEngine::stopScript() blocks for up to ~5s waiting for the worker
+// thread to notice the stop request (e.g. while a script is inside
+// time.sleep() or a long-timeout cangaroo.receive() call). Calling it
+// directly from a GUI slot freezes the whole application for that long.
+// The Stop button itself doesn't need to wait for that: onScriptFinished()
+// already reacts to PythonEngine::scriptFinished (queued connection) once
+// the worker actually exits, so the wait can happen off the GUI thread.
+void ScriptWindow::requestStopAsync()
+{
+    if (_stopInProgress || !_engine->isRunning()) { return; }
+    _stopInProgress = true;
+    _btnStop->setEnabled(false);
+
+    // Join a previous stop thread (from an earlier run) before replacing it --
+    // by this point it has necessarily already finished, since onScriptFinished()
+    // is what cleared _stopInProgress and made this call reachable again.
+    if (_stopThread.joinable()) { _stopThread.join(); }
+
+    PythonEngine *engine = _engine;
+    _stopThread = std::thread([engine]() { engine->stopScript(); });
 }
 
 bool ScriptWindow::saveXML(Backend &backend, QDomDocument &xml, QDomElement &root)
