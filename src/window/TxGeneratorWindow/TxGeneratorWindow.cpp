@@ -237,6 +237,10 @@ bool TxGeneratorWindow::loadXML(Backend &backend, QDomElement &el)
     // no-op if the setup hasn't been loaded yet — resolveInterfaceNames() is
     // also called from refreshInterfaces() once the setup is applied).
     resolveInterfaceNames();
+    // dbMsg is a runtime pointer and can't be persisted; re-link by raw CAN ID
+    // now (may be a no-op if the setup/DBCs haven't been loaded yet —
+    // resolveDbMessages() is also called from refreshInterfaces()).
+    resolveDbMessages();
     updateActiveList();
     return true;
 }
@@ -254,6 +258,16 @@ void TxGeneratorWindow::resolveInterfaceNames()
                 break;
             }
         }
+    }
+}
+
+void TxGeneratorWindow::resolveDbMessages()
+{
+    MeasurementSetup &setup = _backend.getSetup();
+    for (CyclicMessage &cm : _cyclicMessages)
+    {
+        if (cm.dbMsg) { continue; }
+        cm.dbMsg = setup.findDbMessage(cm.msg);
     }
 }
 
@@ -280,6 +294,8 @@ void TxGeneratorWindow::refreshInterfaces()
 
     // Re-resolve interface names in case frames were loaded before the setup existed.
     resolveInterfaceNames();
+    // Re-resolve dbMsg links in case frames were loaded before the DBCs existed.
+    resolveDbMessages();
     populateDbcMessages();
 }
 

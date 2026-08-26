@@ -121,6 +121,10 @@ private:
     // Matches each CyclicMessage::interfaceName against the combo box and
     // sets interfaceId accordingly. Called after the combo box is repopulated.
     void resolveInterfaceNames();
+    // Re-links each CyclicMessage without a dbMsg to its CanDbMessage by raw CAN
+    // ID, via the setup's message cache. Needed after loadXML(), since dbMsg is
+    // a runtime pointer that isn't (and can't be) persisted to the project file.
+    void resolveDbMessages();
     /// Arms the single-shot send timer for the earliest pending deadline, or
     /// stops it when nothing is due.
     void updateSendTimer();
