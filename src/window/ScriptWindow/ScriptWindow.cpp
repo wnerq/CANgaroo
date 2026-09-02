@@ -261,7 +261,6 @@ void ScriptWindow::onScriptStarted()
     _btnStop->setEnabled(true);
     _editor->setReadOnly(true);
     _input->setEnabled(true);
-    _input->setFocus();
 }
 
 void ScriptWindow::onScriptFinished()

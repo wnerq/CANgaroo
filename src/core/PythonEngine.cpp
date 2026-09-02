@@ -1240,9 +1240,11 @@ void PythonEngine::workerFunc(std::string code)
             [this]() -> bool { return _stopRequested.load(); });
 
         globals["_cangaroo_input"] = py::cpp_function(
-            [this]() -> std::string { return readInputLine(); });
+            [this]() -> std::string { return readInputLine(); },
+            py::call_guard<py::gil_scoped_release>());
 
         py::exec(R"(
+import io
 import sys
 
 class _SignalWriter:
@@ -1257,8 +1259,9 @@ class _SignalWriter:
 sys.stdout = _SignalWriter(False)
 sys.stderr = _SignalWriter(True)
 
-class _SignalReader:
+class _SignalReader(io.TextIOBase):
     def __init__(self):
+        super().__init__()
         self._buffer = ""
     def readline(self, size=-1):
         if not self._buffer:
